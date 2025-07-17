@@ -17,26 +17,25 @@ async function getData(userId) {
         let answer = "0"
         if (userId == TELEGRAM_CHAT_MT) {
             if (MTtasks.length) {
-                answer = await sendMsg(MTtasks)
+                // answer = await sendMsg(MTtasks)
+                answer = MTtasks
             }
         }
         else if (userId == TELEGRAM_CHAT_DEA) {
             if (DEAtasks.length) {
-                answer = await sendMsg(DEAtasks)
+                answer = DEAtasks
             }
-        }
-        else {
-            answer = "Кто Ты Воин???"
         }
 
         return answer
-      
+
     } catch (error) {
         console.error('Ошибка:', error);
     }
 }
 
-async function sendMsg(tasks) {
+async function formateMsg(tasks) {
+    
     const sortedTasks = sortTasks(tasks);
     // let taskMessage = 'Привет, вот задачи которые нужно выполнить в ближайшие дни:\n\n';
     let taskMessage = '\n\n';
@@ -90,8 +89,15 @@ function sortTasks(tasks) {
         else if (taskDate.getDate() - todayDate === 2 || (taskDate.getMonth() > todayMonth) && taskDate.getDate() === 2) sortedTasks.afterTomorrow.push(task)
         else if (taskDate < today) sortedTasks.overdue.push(task)
     })
-
     return sortedTasks
+
+}
+
+
+function dateToTimestamp(dateStr) {
+    const [day, month, year] = dateStr.split('.').map(Number);
+    const date = new Date(year, month - 1, day);
+    return date.getTime();
 }
 
 
@@ -99,5 +105,7 @@ function sortTasks(tasks) {
 
 
 module.exports = {
-  getData
+    getData,
+    dateToTimestamp,
+    formateMsg
 };
