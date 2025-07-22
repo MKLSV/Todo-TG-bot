@@ -1,13 +1,15 @@
+require('dotenv').config()
+
 const axios = require('axios')
 const TelegramBot = require('node-telegram-bot-api');
 
 const { getData, dateToTimestamp, formateMsg } = require('./service');
 
-const token = "8022738459:AAHqxjyrBwhVFVAU9Q1925rzSC9gEanEtbY";
-const bot = new TelegramBot(token, { polling: true });
+const token = process.env.token
+const TELEGRAM_CHAT_MT = process.env.TELEGRAM_CHAT_MT
+const TELEGRAM_CHAT_DEA = process.env.TELEGRAM_CHAT_DEA
 
-const TELEGRAM_CHAT_MT = "555207329"
-const TELEGRAM_CHAT_DEA = "644190724"
+const bot = new TelegramBot(token, { polling: true });
 
 const userStates = {};
 
