@@ -1,8 +1,8 @@
 const { MongoClient } = require('mongodb');
 
-const MONGO_URI = process.env.MONGO_URI
-const dbName = process.env.dbName
-const collectionName = process.env.collectionName
+const MONGO_URI = "mongodb+srv://kolosovmatveymk:AFblRZu9hLe70Sks@cluster0.414nj.mongodb.net/?retryWrites=true&w=majority"
+const dbName = "TodoDB"
+const collectionName = "tasks"
 
  async function getDataFromMongoDB() {
   const client = new MongoClient(MONGO_URI);
@@ -29,4 +29,5 @@ const collectionName = process.env.collectionName
 
 module.exports = {
   getDataFromMongoDB
+
 };
