@@ -1,4 +1,3 @@
-require('dotenv').config()
 
 const axios = require('axios')
 const TelegramBot = require('node-telegram-bot-api');
@@ -249,5 +248,6 @@ async function saveTask(taskData) {
     // Возвращаем промис для асинхронной обработки
     return
 }
+
 
 
