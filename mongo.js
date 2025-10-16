@@ -28,4 +28,5 @@ const collectionName = process.env.collectionName
 
 export {
   getDataFromMongoDB
+
 };
