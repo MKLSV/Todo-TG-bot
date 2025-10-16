@@ -1,5 +1,4 @@
-const { MongoClient } = require('mongodb');
-
+import { MongoClient } from 'mongodb';
 const MONGO_URI = process.env.MONGO_URI
 const dbName = process.env.dbName
 const collectionName = process.env.collectionName
@@ -27,6 +26,6 @@ const collectionName = process.env.collectionName
   }
 }
 
-module.exports = {
+export {
   getDataFromMongoDB
 };

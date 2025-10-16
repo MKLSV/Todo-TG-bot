@@ -1,4 +1,4 @@
-const { getDataFromMongoDB } = require('./mongo.js');
+import { getDataFromMongoDB } from './mongo.js';
 
 const TELEGRAM_CHAT_MT = "555207329"
 const TELEGRAM_CHAT_DEA = "644190724"
@@ -104,8 +104,8 @@ function dateToTimestamp(dateStr) {
 
 
 
-module.exports = {
-    getData,
-    dateToTimestamp,
-    formateMsg
+export {
+  getData,
+  dateToTimestamp,
+  formateMsg
 };

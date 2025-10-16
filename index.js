@@ -1,236 +1,263 @@
-require('dotenv').config()
+import 'dotenv/config';
+import { Telegraf, Markup } from 'telegraf';
+import axios from 'axios';
+import fs from 'fs';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegPath from "ffmpeg-static";
+import fetch from 'node-fetch';
+import vosk from 'vosk';
+import { getData, dateToTimestamp, formateMsg } from './service.js';
 
-const axios = require('axios')
-const TelegramBot = require('node-telegram-bot-api');
+ffmpeg.setFfmpegPath(ffmpegPath);
 
-const { getData, dateToTimestamp, formateMsg } = require('./service');
+const MODEL_PATH = "./model";
+if (!fs.existsSync(MODEL_PATH)) {
+    console.error("⚠️ Сначала скачай модель Vosk и распакуй в папку ./model");
+    process.exit(1);
+}
+vosk.setLogLevel(0);
+const model = new vosk.Model(MODEL_PATH);
 
-const token = process.env.token
-const TELEGRAM_CHAT_MT = process.env.TELEGRAM_CHAT_MT
-const TELEGRAM_CHAT_DEA = process.env.TELEGRAM_CHAT_DEA
+const token = process.env.token;
+const TELEGRAM_CHAT_MT = process.env.TELEGRAM_CHAT_MT;
+const TELEGRAM_CHAT_DEA = process.env.TELEGRAM_CHAT_DEA;
 
-const bot = new TelegramBot(token, { polling: true });
+const bot = new Telegraf(token);
 
+
+// ---------- Состояния пользователей ----------
 const userStates = {};
 
-const menuKeyboard = {
-    reply_markup: {
-        keyboard: [
-            [{ text: 'Посмотреть ближайшие задачи' }], [{ text: 'Добавить задачу' }, { text: 'Выполнить задачу' }]
-        ],
-        // resize_keyboard: true,
-        one_time_keyboard: false
-    }
-};
+// ---------- Главное меню ----------
+const menuKeyboard = Markup.keyboard([
+    ['Посмотреть ближайшие задачи'],
+    ['Добавить задачу', 'Выполнить задачу']
+]).resize();
 
-// Обработчики событий (должны быть объявлены один раз)
-bot.on('message', async (msg) => {
-    // Ваш обработчик сообщений
-    const chatId = msg.chat.id;
-    const text = msg.text;
+// ---------- Команды ----------
+bot.start((ctx) => ctx.reply('Привет! Что делаем?', menuKeyboard));
 
+bot.on('text', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const text = ctx.message.text;
+
+    // Проверка пользователя
     if (chatId != TELEGRAM_CHAT_MT && chatId != TELEGRAM_CHAT_DEA) {
-        console.log(chatId)
-        await bot.sendMessage(chatId, 'Кто ты войн???');
-        return
+        return ctx.reply('Кто ты, воин? 😎');
     }
-    // Если у пользователя есть активное состояние - обрабатываем диалог
-    if (userStates[chatId]) {
-        handleDialogState(chatId, text);
-        return;
-    }
-    // Обработка команд основного меню
-    if (text === 'Посмотреть ближайшие задачи') {
-        const tasks = await getData(chatId)
-        if (tasks == 0) {
-            await bot.sendMessage(chatId, 'Нет задач на ближайшее время... Кайфуй, отдыхай😎');
-        } else {
-            const formatedTasks = await formateMsg(tasks)
-            await bot.sendMessage(chatId, 'Вот ваши ближайшие задачи:');
-            await bot.sendMessage(chatId, formatedTasks);
-        }
-    }
-    if (text === 'Добавить задачу') {
-        await bot.sendMessage(chatId, 'Добавьте задачу по кнопке ниже', {
-            reply_markup: {
-                inline_keyboard: [[{
-                    text: 'Добавить задачу',
-                    callback_data: 'start_task_creation'
-                }]]
+
+    // Если пользователь в процессе создания задачи
+    if (userStates[chatId]) return handleDialogState(ctx, text);
+
+    // Основное меню
+    switch (text) {
+        case 'Посмотреть ближайшие задачи':
+            {
+                const tasks = await getData(chatId);
+                if (!tasks.length)
+                    return ctx.reply('Нет задач на ближайшее время... Кайфуй 😎');
+                await ctx.reply('Вот ваши ближайшие задачи:');
+                await ctx.reply(await formateMsg(tasks));
             }
-        });
-    }
-    if (text === 'Выполнить задачу') {
-        await bot.sendMessage(chatId, 'Выполнить задачу по кнопке ниже', {
-            reply_markup: {
-                inline_keyboard: [[{
-                    text: 'Выполнить задачу',
-                    callback_data: 'start_complited_task'
-                }]]
+            break;
+
+        case 'Добавить задачу':
+            await ctx.reply(
+                'Выберите получателя:',
+                Markup.inlineKeyboard([
+                    [Markup.button.callback('Для всех', 'recipient_Для всех')],
+                    [Markup.button.callback('Матвей', 'recipient_Матвей')],
+                    [Markup.button.callback('Делайла', 'recipient_Делайла')]
+                ])
+            );
+            break;
+
+        case 'Выполнить задачу':
+            {
+                const tasks = await getData(chatId);
+                if (!tasks.length)
+                    return ctx.reply('Нет активных задач!');
+
+                await ctx.reply(
+                    'Выберите выполненную задачу:',
+                    Markup.inlineKeyboard(
+                        tasks.map((task) => [
+                            Markup.button.callback(task.text, `complete_${task._id}`)
+                        ])
+                    )
+                );
             }
-        });
+            break;
+
+        default:
+            await ctx.reply('Выберите опцию:', menuKeyboard);
     }
-    else {
-        await bot.sendMessage(chatId, 'Выберите опцию:', menuKeyboard);
-    }
-    // await bot.sendMessage(chatId, menuKeyboard);
 });
 
-bot.on('callback_query', async (callbackQuery) => {
-    // Ваш обработчик inline-кнопок
-    const chatId = callbackQuery.message.chat.id;
-    const data = callbackQuery.data;
-
-    // Запуск процесса создания задачи
-    if (data === 'start_task_creation') {
-        userStates[chatId] = {
-            step: 'select_task',
-            data: {}
-        };
-
-        await bot.answerCallbackQuery(callbackQuery.id);
-        await bot.sendMessage(chatId, 'Выберите задачу:', {
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: 'Для всех', callback_data: 'recipient_Для всех' }],
-                    [{ text: 'Матвей', callback_data: 'recipient_Матвей' }],
-                    [{ text: 'Делайла', callback_data: 'recipient_Делайла' }]
-                ]
-            }
-        });
-    }
-    // Запуск процесса выполнения задачи
-    if (data === 'start_complited_task') {
-        const tasks = await getData(chatId)
-        await bot.answerCallbackQuery(callbackQuery.id);
-        await bot.sendMessage(chatId, 'Выберите выполненную задачу:', {
-            reply_markup: {
-                inline_keyboard: tasks.map(task => [{
-                    text: task.text,
-                    callback_data: `complete_${task._id}` // Используем ID вместо текста
-                }])
-            }
-        });
-    }
-
-    // Обработка выбора получателя
-    if (data.startsWith('complete_')) {
-        const complitedTaskId = data.split('_')[1];
-        const tasks = await getData(chatId)
-        const taskToUpdate = tasks.find(task => (
-            task._id == complitedTaskId
-        ))
-        const updatedTask = { ...taskToUpdate, isCompleted: true, completedAt: Date.now() }
-        try {
-            await axios.put(`https://to-do-do-next-red.vercel.app/api/tasks/${updatedTask._id}`, updatedTask);
-        } catch (e) {
-            console.log(e)
-            await bot.answerCallbackQuery(callbackQuery.id);
-            await bot.sendMessage(chatId, 'Не получилось сорян...');
-        }
-        await bot.answerCallbackQuery(callbackQuery.id);
-        await bot.sendMessage(chatId, `Задача ${updatedTask.text} выполнена!🥳`);
-        await bot.sendAnimation(chatId, 'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExdmNpdmNsdXliN2pucmNtcnBnaTdoMDJ2MGM2bDAxZDdhd3AzaTR6YiZlcD12MV9naWZzX3NlYXJjaCZjdD1n/s2qXK8wAvkHTO/giphy.gif');
-        return
-    }
+// ---------- Inline callback обработчик ----------
+bot.on('callback_query', async (ctx) => {
+    const data = ctx.callbackQuery.data;
+    const chatId = ctx.chat.id;
 
     if (data.startsWith('recipient_')) {
         const recipient = data.split('_')[1];
-        userStates[chatId] = {
-            step: 'enter_task',
-            data: { recipient }
-        };
-
-        await bot.answerCallbackQuery(callbackQuery.id);
-        await bot.sendMessage(chatId, 'Напишите задачу:');
+        userStates[chatId] = { step: 'enter_task', data: { recipient } };
+        await ctx.editMessageText('Напишите задачу:');
     }
 
-    // Обработка решения о дате
     if (data === 'date_yes') {
         userStates[chatId].step = 'enter_date';
-        await bot.answerCallbackQuery(callbackQuery.id);
-        await bot.sendMessage(chatId, 'Введите дату выполнения в формате ДД.ММ.ГГГГ:');
+        await ctx.editMessageText('Введите дату выполнения в формате ДД.ММ.ГГГГ:');
     }
 
     if (data === 'date_no') {
-        userStates[chatId].step = 'confirmation';
         userStates[chatId].data.date = null;
-        await bot.answerCallbackQuery(callbackQuery.id);
-        sendConfirmation(chatId);
+        userStates[chatId].step = 'confirmation';
+        await sendConfirmation(ctx);
     }
 
-    // Обработка подтверждения
     if (data === 'confirm_yes') {
         await saveTask(userStates[chatId].data);
-        await bot.answerCallbackQuery(callbackQuery.id);
-        await bot.sendMessage(chatId, '✅ Задача успешно добавлена!');
         delete userStates[chatId];
+        await ctx.editMessageText('✅ Задача успешно добавлена!');
     }
 
     if (data === 'confirm_no') {
-        await bot.answerCallbackQuery(callbackQuery.id);
-        await bot.sendMessage(chatId, '❌ Создание задачи отменено');
         delete userStates[chatId];
+        await ctx.editMessageText('❌ Создание задачи отменено');
     }
 
+    if (data.startsWith('complete_')) {
+        const id = data.split('_')[1];
+        const tasks = await getData(chatId);
+        const task = tasks.find((t) => t._id.toString() === id);
+        if (!task) return ctx.reply('Задача не найдена.');
+
+        const updated = { ...task, isCompleted: true, completedAt: Date.now() };
+        try {
+            await axios.put(
+                `https://to-do-do-next-red.vercel.app/api/tasks/${updated._id}`,
+                updated
+            );
+            await ctx.reply(`Задача "${updated.text}" выполнена! 🥳`);
+            await ctx.replyWithAnimation(
+                'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExdmNpdmNsdXliN2pucmNtcnBnaTdoMDJ2MGM2bDAxZDdhd3AzaTR6YiZlcD12MV9naWZzX3NlYXJjaCZjdD1n/s2qXK8wAvkHTO/giphy.gif'
+            );
+        } catch {
+            await ctx.reply('Не получилось, сорян...');
+        }
+    }
+
+    await ctx.answerCbQuery();
 });
-async function handleDialogState(chatId, text) {
+
+// ---------- Голосовые сообщения ----------
+
+bot.on("voice", async (ctx) => {
+    try {
+        const fileId = ctx.message.voice.file_id;
+        const chatId = ctx.chat.id;
+        const fileLink = await ctx.telegram.getFileLink(fileId);
+
+        // 1️⃣ Скачиваем голосовое сообщение (.oga)
+        const res = await fetch(fileLink.href);
+        const buffer = Buffer.from(await res.arrayBuffer());
+        fs.writeFileSync("voice.oga", buffer);
+
+        // 2️⃣ Конвертируем в WAV (16kHz, моно)
+        await new Promise((resolve, reject) => {
+            ffmpeg("voice.oga")
+                .audioFrequency(16000)
+                .audioChannels(1)
+                .format("wav")
+                .on("end", resolve)
+                .on("error", reject)
+                .save("voice.wav");
+        });
+
+        // 3️⃣ Распознаём речь
+        const rec = new vosk.Recognizer({ model: model, sampleRate: 16000 });
+        const data = fs.readFileSync("voice.wav");
+        rec.acceptWaveform(data);
+        const result = rec.finalResult();
+        rec.free();
+
+        const text = result.text || "Не удалось распознать речь";
+        if (text === "Не удалось распознать речь") {
+            await ctx.reply(`"Не удалось распознать речь"`);
+        } else {
+            const taskData = parseTaskText(text)
+            userStates[chatId] = {
+                data: {
+                    recipient: chatId == TELEGRAM_CHAT_MT ? "Матвей" : "Делайла",
+                    task: taskData.task,
+                    date: taskData.date
+                }
+            }
+            if (taskData.type === 'добавь') {
+                await sendConfirmation(ctx)
+            } else {
+                await ctx.reply(`🗣 Не понял задачу: ${text}`);
+                await ctx.reply(`Если хочешь добавить зачачу, скажи что то в роде:`);
+                await ctx.reply(`Добавь задачу на 15го октября балатироваться в призеденты`);
+            }
+            console.log(taskData)
+        }
+
+
+    } catch (e) {
+        console.error(e);
+        await ctx.reply("❌ Ошибка при обработке голосового сообщения");
+    }
+});
+
+// ---------- Обработка состояний ----------
+async function handleDialogState(ctx, text) {
+    const chatId = ctx.chat.id;
     const state = userStates[chatId];
 
-    switch (state.step) {
-        case 'enter_task':
-            state.data.task = text;
-            state.step = 'ask_date';
-            await bot.sendMessage(chatId, 'Установить дату выполнения?', {
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: 'Да', callback_data: 'date_yes' }, { text: 'Нет', callback_data: 'date_no' }]
-                    ]
-                }
-            });
-            break;
+    if (state.step === 'enter_task') {
+        state.data.task = text;
+        state.step = 'ask_date';
+        await ctx.reply(
+            'Установить дату выполнения?',
+            Markup.inlineKeyboard([
+                [Markup.button.callback('Да', 'date_yes')],
+                [Markup.button.callback('Нет', 'date_no')]
+            ])
+        );
+    } else if (state.step === 'enter_date') {
+        if (/^\d{2}\.\d{2}\.\d{4}$/.test(text)) {
 
-        case 'enter_date':
-            // Простая валидация даты
-            if (/^\d{2}\.\d{2}\.\d{4}$/.test(text)) {
-                state.data.date = text;
-                state.step = 'confirmation';
-                sendConfirmation(chatId);
-            } else {
-                await bot.sendMessage(chatId, '❌ Неверный формат даты! Используйте ДД.ММ.ГГГГ');
-            }
-            break;
+            state.data.date = text;
+            state.step = 'confirmation';
+            await sendConfirmation(ctx);
+        } else {
+            await ctx.reply('❌ Неверный формат даты! Используйте ДД.ММ.ГГГГ');
+        }
     }
 }
-async function sendConfirmation(chatId) {
+
+// ---------- Подтверждение ----------
+async function sendConfirmation(ctx) {
+    const chatId = ctx.chat.id;
     const { recipient, task, date } = userStates[chatId].data;
-    const recipientName = {
-        all: 'Все',
-        matvey: 'Матвей',
-        delaila: 'Делайла'
-    }[recipient] || recipient;
 
-    const message = `Подтвердите задачу:\n\n`
-        + `👥 Для: ${recipientName}\n`
-        + `📝 Задача: ${task}\n`
-        + `📅 Дата: ${date || 'не установлена'}`;
-
-    await bot.sendMessage(chatId, message, {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: 'Подтвердить', callback_data: 'confirm_yes' }],
-                [{ text: 'Отменить', callback_data: 'confirm_no' }]
-            ]
-        }
-    });
-
-
+    const message = `Подтвердите задачу:\n\n👥 Для: ${recipient}\n📝 ${task}\n📅 ${date || 'Без даты'}`;
+    await ctx.reply(
+        message,
+        Markup.inlineKeyboard([
+            [Markup.button.callback('Подтвердить', 'confirm_yes')],
+            [Markup.button.callback('Отменить', 'confirm_no')]
+        ])
+    );
 }
+
+// ---------- Сохранение задачи ----------
 async function saveTask(taskData) {
-    // Здесь логика сохранения в БД
-    console.log('Saving task:', taskData);
-    const timestamp = taskData.date ? dateToTimestamp(taskData.date) : null
-    const dataToSend = {
+    console.log(taskData.date)
+    const timestamp = taskData.date ? dateToTimestamp(taskData.date) : null;
+    const payload = {
         owner: taskData.recipient,
         type: 'задача',
         text: taskData.task,
@@ -238,15 +265,71 @@ async function saveTask(taskData) {
         repeat: false,
         createdAt: Date.now(),
         isCompleted: false
-    }
-    console.log('Saving task:', dataToSend);
+    };
+
     try {
-        await axios.post("https://to-do-do-next-red.vercel.app/api/tasks", dataToSend);
-        console.log('ok')
-    } catch (e) {
-        console.log(e)
+        await axios.post('https://to-do-do-next-red.vercel.app/api/tasks', payload);
+    } catch (err) {
+        console.error('Ошибка при сохранении задачи:', err.message);
     }
-    // Возвращаем промис для асинхронной обработки
-    return
 }
 
+function parseTaskText(text) {
+    text = text.toLowerCase().trim();
+
+    // Тип действия
+    let type = "";
+    if (text.includes("добавь") || text.includes("добавить") || text.includes("добавим") || text.includes("добав") || text.includes("дбави") || text.includes("обав") || text.includes("обавь") || text.includes("создай")) type = "добавь";
+
+    // Список месяцев
+    const months = {
+        января: "01", февраля: "02", марта: "03", апреля: "04",
+        мая: "05", июня: "06", июля: "07", августа: "08",
+        сентября: "09", октября: "10", ноября: "11", декабря: "12"
+    };
+
+    // 📅 Поиск даты (цифровая или словесная)
+    let date = null;
+    const dateMatch = text.match(/(\d{1,2})[.\s]*(\d{1,2})[.\s]*(\d{2,4})/);
+    if (dateMatch) {
+        const [_, d, m, y] = dateMatch;
+        date = `${y.length === 2 ? "20" + y : y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+    } else {
+        const wordDate = text.match(/(\d{1,2}|первое|второе|третье|четвертое|пятое|шестое|седьмое|восьмое|девятое|десятое|одиннадцатое|двенадцатое|тринадцатое|четырнадцатое|пятнадцатое|шестнадцатое|семнадцатое|восемнадцатое|девятнадцатое|двадцатое|двадцать первое|двадцать второе|двадцать третье|двадцать четвертое|двадцать пятое|двадцать шестое|двадцать седьмое|двадцать восьмое|двадцать девятое|тридцатое|тридцать первое)\s+([а-я]+)/);
+        if (wordDate && months[wordDate[2]]) {
+            const day = wordToNumber(wordDate[1]);
+            const month = months[wordDate[2]];
+            const year = new Date().getFullYear();
+            date = `${String(day).padStart(2, "0")}.${month}.${year}`;
+        }
+    }
+
+    // ✏️ Извлечение задачи (без "задача", "задачу" и т.д.)
+    let task = text
+        .replace(/добавь|создай/gi, "")
+        .replace(/задач[ауыи]/gi, "") // ← удаляем формы слова "задача"
+        .replace(/на\s+\d{1,2}[.\s]\d{1,2}[.\s]\d{2,4}/gi, "")
+        .replace(/на\s+[а-я]+\s+[а-я]+/gi, "")
+        .trim();
+
+    return { type, date, task };
+}
+
+// 🔢 Вспомогательная функция для словесных чисел
+function wordToNumber(word) {
+    const map = {
+        первое: 1, второе: 2, третье: 3, четвертое: 4, пятое: 5,
+        шестое: 6, седьмое: 7, восьмое: 8, девятое: 9, десятое: 10,
+        одиннадцатое: 11, двенадцатое: 12, тринадцатое: 13, четырнадцатое: 14,
+        пятнадцатое: 15, шестнадцатое: 16, семнадцатое: 17, восемнадцатое: 18,
+        девятнадцатое: 19, двадцатое: 20, 'двадцать первое': 21, 'двадцать второе': 22,
+        'двадцать третье': 23, 'двадцать четвертое': 24, 'двадцать пятое': 25,
+        'двадцать шестое': 26, 'двадцать седьмое': 27, 'двадцать восьмое': 28,
+        'двадцать девятое': 29, тридцатое: 30, 'тридцать первое': 31
+    };
+    return map[word] || parseInt(word);
+}
+
+// ---------- Запуск ----------
+bot.launch();
+console.log('✅ Бот запущен на Telegraf!');
